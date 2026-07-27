@@ -49,7 +49,10 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ]; then
             BASE="$PR_BASE_SHA"
           else
-            BASE="$(git rev-parse HEAD~1 2>/dev/null || git hash-object -t tree /dev/null)"
+            # -q --verify: prints nothing on failure (plain rev-parse echoes the
+            # unresolvable arg to stdout — on a single-commit repo BASE became two
+            # lines and git diff exited 128)
+            BASE="$(git rev-parse -q --verify HEAD~1 2>/dev/null || git hash-object -t tree /dev/null)"
           fi
           CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
           if [ -z "$CHANGED" ]; then

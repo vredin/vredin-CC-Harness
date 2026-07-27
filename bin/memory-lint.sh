@@ -17,7 +17,10 @@ violation() { echo "VIOLATION: $*"; FAILURES=$((FAILURES + 1)); }
 warn()      { echo "WARN: $*";      WARNINGS=$((WARNINGS + 1)); }
 
 # file mtime, portable (macOS/BSD then GNU)
-mtime_of() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null; }
+# GNU (-c) first, BSD (-f) fallback: on GNU/Linux `stat -f` is filesystem mode —
+# it partially succeeds and pollutes stdout before the fallback runs, crashing
+# the arithmetic below ("File: unbound variable" — CI-only, macOS stayed green).
+mtime_of() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
 
 # ---------------------------------------------------------------------------
 # Legacy mode: no lesson dir, but old single-file format exists.
