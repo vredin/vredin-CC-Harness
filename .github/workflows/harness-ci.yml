@@ -1,0 +1,61 @@
+# harness-ci.yml — deterministic checks for the template harness itself.
+# job 1: hook test stand (bin/test-hooks.sh — hermetic, temp-dir only)
+# job 2: memory system lint (bin/memory-lint.sh — read-only)
+# job 3: static gate on changed files (bin/run_static.sh --gate).
+#        Missing tools on the runner SKIP silently — the gate fails
+#        only on REAL findings, never on absent tooling.
+# Injection safety: only github SHAs / event_name reach the shell, and only
+# via env vars (never inline ${{ }} inside run:) per GitHub hardening guide.
+name: harness-ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  hooks:
+    name: hook test stand
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run hook fixtures
+        run: bash bin/test-hooks.sh
+
+  memory-lint:
+    name: memory system lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint memory files
+        run: bash bin/memory-lint.sh .
+
+  static-gate:
+    name: static gate (changed files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install static tools (best effort — script skips what's missing)
+        run: pip install --quiet ruff mypy bandit vulture radon detect-secrets || true
+      - name: Collect changed files and run gate
+        env:
+          # SHAs only (40-char hex, not attacker-controlled text); passed via
+          # env — never interpolated inline into the script body.
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE_SHA"
+          else
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git hash-object -t tree /dev/null)"
+          fi
+          CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD)
+          if [ -z "$CHANGED" ]; then
+            echo "No changed files — gate passes."
+            exit 0
+          fi
+          echo "$CHANGED"
+          # shellcheck disable=SC2086
+          bash bin/run_static.sh --gate $CHANGED

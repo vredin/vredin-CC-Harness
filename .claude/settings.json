@@ -1,0 +1,75 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "comment": "Unified PreToolUse dispatcher (file tools) — reads official hook JSON from stdin. R1 backup-gate (Pre-Change Protocol: last commit must be [BACKUP]), R2 config-protection (CLAUDE.md/.claude/settings.json; bypass CLAUDE_CONFIG_EDIT_OK=1), R3 security reminder (delegates code files to security_reminder/security_reminder_hook.py; disable per session: ENABLE_SECURITY_REMINDER=0), R4 todo-diablo-gate (docs/TASK.md → todo-diablo-gate.sh). Fail-open on internal errors, logged to .claude/session-log/hook-errors.log. Script: .claude/hooks/dispatch.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.py\" PreToolUse"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "comment": "Unified PreToolUse dispatcher (Bash) — reads official hook JSON from stdin. R5 commit-prefix ([BACKUP|CHANGE|META|HANDOFF|PROCESS|RULES|SEC|FIX|WIP]), R6 task-id-validator (T-NNN requires docs/specs/T-NNN-*.md → task-id-validator.sh), R7 destructive-shell (rm -rf, git init/reset --hard/push --force/clean -fd, git rm on .claude|CLAUDE.md, broad git add -A/--all/. — bypass CLAUDE_ALLOW_BROAD_ADD=1; broad add has leaked secrets before), R8 destructive-SQL (DROP/TRUNCATE, DELETE without WHERE). Fail-open on internal errors, logged to .claude/session-log/hook-errors.log. Script: .claude/hooks/dispatch.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/dispatch.py\" PreToolUse"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "comment": "Final scan for console.log in project src dirs",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; found=$(grep -rn \"console\\.log\" \"$GIT_ROOT/src\" \"$GIT_ROOT/frontend/src\" \"$GIT_ROOT/app\" 2>/dev/null | grep -v node_modules | head -5); [ -n \"$found\" ] && echo \"$found\" && echo \"[STOP CHECK] console.log found — clean up before deploy\" || true'"
+          }
+        ]
+      },
+      {
+        "comment": "Session log — append session entry for cost/activity tracking. ORDER: must run BEFORE the context-budget-enforce blocker below, because Stop hooks with exit 2 can short-circuit subsequent hooks and we want the audit trail preserved exactly when blocking happens.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; LOG=\"$GIT_ROOT/.claude/session-log.jsonl\"; COMMITS=$(git -C \"$GIT_ROOT\" log --since=\"4 hours ago\" --oneline 2>/dev/null | wc -l | tr -d \" \"); FILES=$(git -C \"$GIT_ROOT\" diff --stat HEAD~${COMMITS:-1} 2>/dev/null | tail -1 | tr -d \" \"); echo \"{\\\"ts\\\":\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\",\\\"commits\\\":$COMMITS,\\\"summary\\\":\\\"$FILES\\\"}\" >> \"$LOG\" 2>/dev/null; echo \"[SESSION LOGGED] $COMMITS commits this session → .claude/session-log.jsonl\"'"
+          }
+        ]
+      },
+      {
+        "comment": "Context budget HARD ENFORCEMENT — blocks Claude from stopping when real context % (from transcript) exceeds threshold AND handoff.md is stale/contentless. Exit 2 forces continuation. Thresholds overridable via CTX_BUDGET_* env vars. Circuit breaker prevents infinite loops. Tests: .claude/hooks/test-context-budget-enforce.sh. Must run BEFORE autopilot-backlog-guard below (that one is LAST).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); [ -n \"$GIT_ROOT\" ] && [ -f \"$GIT_ROOT/.claude/hooks/context-budget-enforce.sh\" ] && exec bash \"$GIT_ROOT/.claude/hooks/context-budget-enforce.sh\"; exit 0'"
+          }
+        ]
+      },
+      {
+        "comment": "AUTOPILOT backlog guard — when .claude/autopilot.flag exists, forces continuation (exit 2) until the agent emits AUTOPILOT-DONE/BLOCKED or the continue-cap (AUTOPILOT_CAP, default 25) is hit. Opt-in via flag file; fail-open; inert (never fires) unless the flag exists. LAST Stop hook. Script: .claude/hooks/autopilot-backlog-guard.sh",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); [ -n \"$GIT_ROOT\" ] && [ -f \"$GIT_ROOT/.claude/hooks/autopilot-backlog-guard.sh\" ] && exec bash \"$GIT_ROOT/.claude/hooks/autopilot-backlog-guard.sh\"; exit 0'"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "comment": "Snapshot transcript before context compaction — audit-only, cannot block. Matcher omitted: fires on BOTH manual /compact and auto-compact per Claude Code hook docs. Sole writer of handoff rescue data (pre-compact-checkpoint.sh removed: three concurrent handoff.md writers conflicted). See .claude/hooks/pre-compact-snapshot.sh. Tests: .claude/hooks/test-pre-compact-snapshot.sh.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); [ -n \"$GIT_ROOT\" ] && [ -f \"$GIT_ROOT/.claude/hooks/pre-compact-snapshot.sh\" ] && exec bash \"$GIT_ROOT/.claude/hooks/pre-compact-snapshot.sh\"; exit 0'"
+          }
+        ]
+      }
+    ]
+  }
+}

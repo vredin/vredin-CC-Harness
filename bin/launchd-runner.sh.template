@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# launchd-runner.sh — generic wrapper invoked by launchd for any scheduled Claude prompt.
+# Generated from this template by `/setup` → "Setup launchd schedules".
+#
+# Usage (from launchd plist):
+#   launchd-runner.sh "/report"
+#   launchd-runner.sh "/docs sync --publish"
+#   launchd-runner.sh "/self-audit"
+#   launchd-runner.sh "/self-audit --global"
+#
+# Invokes Claude via ccs (Claude profile switcher) when available — preserves
+# the same auth, profile, and account isolation the user has interactively.
+# Falls back to direct claude binary if ccs not installed.
+#
+# Override the ccs profile via CCS_PROFILE env var in the plist (default: personal).
+
+set -euo pipefail
+
+PROMPT="${1:?prompt required as first argument}"
+
+# Source shell profile to get PATH (nvm/ccs binary often live there) + env vars.
+# Tolerate failures inside profile (e.g. nvm in non-tty).
+if [ -f "$HOME/.zshrc" ]; then
+  source "$HOME/.zshrc" 2>/dev/null || true
+fi
+
+# Default: plain claude (owner's personal-project login). ccs is used ONLY when a
+# profile is explicitly set via CCS_PROFILE in the plist (e.g. work projects).
+# History: defaulting to `ccs personal` sent every schedule to an unused profile —
+# weeks of silent 401s (fixed 2026-07-03).
+if [ -n "${CCS_PROFILE:-}" ] && command -v ccs >/dev/null 2>&1; then
+  RUNNER=("$(command -v ccs)" "$CCS_PROFILE")
+else
+  CLAUDE_BIN="${CLAUDE_BIN:-{{CLAUDE_BIN}}}"
+  [ -x "$CLAUDE_BIN" ] || CLAUDE_BIN="$(command -v claude || true)"
+  if [ -z "$CLAUDE_BIN" ] || [ ! -x "$CLAUDE_BIN" ]; then
+    echo "[$(date)] FAIL: claude binary not found" >&2
+    echo "[$(date)] PATH was: $PATH" >&2
+    exit 1
+  fi
+  RUNNER=("$CLAUDE_BIN")
+fi
+
+PROJECT_DIR="{{PROJECT_PATH}}"
+if [ ! -d "$PROJECT_DIR" ]; then
+  echo "[$(date)] FAIL: project dir not found: $PROJECT_DIR" >&2
+  exit 1
+fi
+
+cd "$PROJECT_DIR"
+
+echo "===================================="
+echo "[$(date)] Running '$PROMPT' for $(basename "$PROJECT_DIR")"
+echo "[$(date)] Runner: ${RUNNER[*]}"
+echo "===================================="
+
+# --dangerously-skip-permissions: required for headless scheduled runs.
+# Safe here because prompt is fixed (controlled by plist), not external input.
+# Without it: tools (Edit/Write/Bash/MCP) get blocked → /report can't write
+# docs/reports/, /self-audit can't save audit file, /docs sync can't publish.
+#
+# Failure alerting (added Stage 4): silent 401s left schedules dead for weeks.
+# On non-zero exit: log to .claude/session-log/schedule-failures.log + macOS
+# notification. Auth errors get a specific "re-login" hint.
+OUT_LOG="$(mktemp -t launchd-run)"
+set +e
+"${RUNNER[@]}" -p "$PROMPT" --dangerously-skip-permissions >"$OUT_LOG" 2>&1
+RC=$?
+set -e
+cat "$OUT_LOG"
+
+if [ "$RC" -ne 0 ]; then
+  FAIL_LOG="$PROJECT_DIR/.claude/session-log/schedule-failures.log"
+  mkdir -p "$(dirname "$FAIL_LOG")"
+  REASON="exit $RC"
+  if grep -qiE "401|Failed to authenticate|invalid.*(credential|token)|not logged in" "$OUT_LOG"; then
+    REASON="AUTH BROKEN (401) — re-login: run 'claude /login' in a terminal (or 'ccs ${CCS_PROFILE:-<profile>}' if this schedule uses ccs)"
+  fi
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] FAIL '$PROMPT' in $(basename "$PROJECT_DIR"): $REASON" >> "$FAIL_LOG"
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"$PROMPT failed: $REASON\" with title \"Claude schedule — $(basename "$PROJECT_DIR")\"" 2>/dev/null || true
+  fi
+fi
+rm -f "$OUT_LOG"
+exit "$RC"

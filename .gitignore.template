@@ -1,0 +1,47 @@
+# Environment / Secrets
+.env
+.env.production
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code — runtime/ephemeral, never the harness itself (see Protected Paths in project.md)
+.claude/cache/
+.claude/.setup.json
+.claude/settings.local.json
+.claude/session-inbox.md
+.claude/session-log/
+.claude/session-log.jsonl
+.claude/worktrees/
+
+# Dependencies / caches
+node_modules/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.complexipy_cache/
+htmlcov/
+.coverage
+.venv/
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Logs
+*.log
+
+temp/
